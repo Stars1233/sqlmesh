@@ -1605,9 +1605,11 @@ class GenericContext(BaseContext, t.Generic[C]):
             backfill_models = None
 
         models_override: t.Optional[UniqueKeyDict[str, Model]] = None
+        selected_fqns: t.Set[str] = set()
+        selected_deletion_fqns: t.Set[str] = set()
         if select_models:
             try:
-                models_override = model_selector.select_models(
+                models_override, selected_fqns = model_selector.select_models(
                     select_models,
                     environment,
                     fallback_env_name=create_from or c.PROD,
@@ -1622,12 +1624,17 @@ class GenericContext(BaseContext, t.Generic[C]):
                 # Only backfill selected models unless explicitly specified.
                 backfill_models = model_selector.expand_model_selections(select_models)
 
+            if not backfill_models:
+                # The selection matched nothing locally. Check whether it matched models
+                # in the deployed environment that were deleted locally.
+                selected_deletion_fqns = selected_fqns - set(self._models)
+
         expanded_restate_models = None
         if restate_models is not None:
             expanded_restate_models = model_selector.expand_model_selections(restate_models)
 
         if (restate_models is not None and not expanded_restate_models) or (
-            backfill_models is not None and not backfill_models
+            backfill_models is not None and not backfill_models and not selected_deletion_fqns
         ):
             raise PlanError(
                 "Selector did not return any models. Please check your model selection and try again."
@@ -1636,7 +1643,7 @@ class GenericContext(BaseContext, t.Generic[C]):
         if always_include_local_changes is None:
             # default behaviour - if restatements are detected; we operate entirely out of state and ignore local changes
             force_no_diff = restate_models is not None or (
-                backfill_models is not None and not backfill_models
+                backfill_models is not None and not backfill_models and not selected_deletion_fqns
             )
         else:
             force_no_diff = not always_include_local_changes
